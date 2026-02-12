@@ -103,7 +103,7 @@ str(sonometro_ubicacion)
 cant_duplicados <- detectar_duplicados(sonometro_ubicacion,c("properties.name", "properties.serialNumber")) #Un sensor no puede aparecer 2 veces
 if (nrow(cant_duplicados) > 0) {
   message('Se han detectado duplicados')
-  sonometro_mediciones <- eliminar_duplicados(sonometro_ubicacion,c("nombre_dispositivo", "decibelios", "fecha_medicion"))
+  sonometro_ubicacion <- eliminar_duplicados(sonometro_ubicacion,c("nombre_dispositivo", "decibelios", "fecha_medicion"))
 }else{
   message('No se han encontrado valores duplicados en el fichero')
 }
@@ -194,16 +194,8 @@ actualizar_historico_trafico(url_trafico, ruta_json_trafico)
 
 
 #2 Cargar datos en df para proceder a tratarlo
-trafico <- leer_json(ruta_json_trafico)
-
-#2.2 Convertir esa lista  en una tabla normal
-df_trafico <- trafico$features
-datos_planos <- df_trafico$properties
-datos_planos$geometry <- df_trafico$geometry
-df_trafico <- datos_planos
+df_trafico <- st_read(ruta_json_trafico, quiet = TRUE)
 head(df_trafico)
-
-
 
 #3 Detectar y tratar valores faltantes
 
@@ -220,7 +212,7 @@ df_trafico$Ocupacion  <- as.integer(df_trafico$Ocupacion)
 df_trafico$Velocidad  <- as.integer(df_trafico$Velocidad)
 
 #Convertir FechaHora a objeto de fecha real
-df_trafico$FechaHora <- ymd_hms(df_trafico$FechaHora)
+df_trafico$FechaHora <- as.POSIXct(df_trafico$FechaHora)
 
 # Verificamos el cambio
 str(df_trafico)
@@ -241,7 +233,6 @@ summary(df_trafico[, c("Intensidad", "Ocupacion", "Velocidad")])
 #6.1 Limpieza valores imposibles
 # Contamos cuántos casos raros hay
 negativos <- sum(df_trafico$Intensidad < 0 | df_trafico$Ocupacion < 0 | df_trafico$Velocidad < 0)
-
 if (negativos > 0) {
   message(" Se han detectado ", negativos, " registros con valores negativos (códigos de error). Eliminando...")
   
@@ -265,3 +256,80 @@ outliers_intensidad <- detectar_outliers_iqr(df_trafico, "Intensidad")
 # ==============================================================================
 # JUNTAR TRAFICO CON SONOMETROS
 # ==============================================================================
+class(df_trafico)
+class(sonometro_sf)
+
+# 1. Crear mapa de tramos únicos
+trafico_mapa_unico <- df_trafico[!duplicated(df_trafico$CodigoSeccion), c("CodigoSeccion")]
+message("Calculando distancias para ", nrow(trafico_mapa_unico), " tramos...")
+
+# 2. Buscar el vecino más cercano (Unión Espacial)
+indices_cercanos <- st_nearest_feature(sonometro_sf, trafico_mapa_unico)
+
+# 3. Asignar el ID de la calle al sonómetro
+sonometro_sf$CodigoSeccion <- trafico_mapa_unico$CodigoSeccion[indices_cercanos]
+message("Calle asignada a cada sonómetro correctamente.")
+
+trafico_mapa_unico <- st_read(tmp_mapa, quiet = TRUE)
+class(trafico_mapa_unico)[1]
+
+# 4. Sincronización Temporal (Redondeo 15 min)
+# Sonómetros
+sonometro_sf$fecha_medicion <- ymd_hms(sonometro_sf$fecha_medicion)
+sonometro_sf$Clave_Tiempo <- round_date(sonometro_sf$fecha_medicion, unit = "15 minutes")
+
+# Tráfico (Aseguramos que df_trafico tenga la clave)
+df_trafico$FechaHora <- as.POSIXct(df_trafico$FechaHora)
+df_trafico$Clave_Tiempo <- round_date(df_trafico$FechaHora, unit = "15 minutes")
+
+message("Claves temporales creadas.")
+
+# 5. Preparar datos de tráfico para el Join
+# Convertimos df_trafico a un dataframe normal para que no haya conflicto de mapas
+df_trafico_datos <- st_drop_geometry(df_trafico)
+
+# 6. UNIÓN FINAL
+dataset_final <- inner_join(
+  sonometro_sf, 
+  df_trafico_datos, 
+  by = c("CodigoSeccion", "Clave_Tiempo")
+)
+
+# ==============================================================================
+# LIMPIEZA DATASET FINAL
+# ==============================================================================
+class(dataset_final)
+colnames(dataset_final)
+
+# 1. Limpiamos nulos
+cant_nulos <- contar_nulos(dataset_final)
+if (cant_nulos > 0) {
+  message('La cantidad de nulos en el fichero  es de ', cant_nulos)
+  dataset_final <- tratar_nulos(dataset_final)
+}else{
+  message('No se han encontrado valores faltantes en el fichero')
+}
+
+# 2. Comprobar los tipos de dato
+str(dataset_final)
+
+# 3. Detectar y tratar duplicados
+# Definimos que un duplicado es el mismo sensor a la misma hora exacta de medición
+cant_duplicados <- detectar_duplicados(dataset_final,c("nombre_dispositivo", "fecha_medicion")) 
+if (nrow(cant_duplicados) > 0) {
+  message('Se han detectado duplicados')
+  dataset_final <- eliminar_duplicados(dataset_final,c("nombre_dispositivo", "fecha_medicion"))
+}else{
+  message('No se han encontrado valores duplicados en el fichero')
+}
+
+# 6 Comprobar inconsistencias en columnas numéricas
+summary(dataset_final)
+
+# ==============================================================================
+# GUARDAR
+# ==============================================================================
+
+df_exportar <- sf::st_drop_geometry(dataset_final)
+colnames(df_exportar) <- gsub("properties\\.", "", colnames(df_exportar))
+write.csv(df_exportar, './datos/procesados/dataset_final_bilbao.csv', row.names = FALSE, fileEncoding = "UTF-8")
