@@ -121,7 +121,7 @@ ggplot(evolucion_tipo_dia, aes(x = Hora, y = Ruido_Medio, color = Tipo_Dia)) +
   theme_minimal()
 
 # ==============================================================================
-# 3. Análisis por Días (Laboral vs Fin de Semana)
+# 4. Análisis por Días (Laboral vs Fin de Semana)
 # Objetivo: Buscar sitios "raros": donde el ruido varía mucho (picos)
 #           frente a sitios donde el ruido es siempre el mismo (constante).
 # ==============================================================================
@@ -143,3 +143,4 @@ ggplot(puntos_dif, aes(x = Media, y = Variabilidad, label = nombre_dispositivo))
        subtitle = "Alta variabilidad indica ruidos por eventos puntuales",
        x = "Ruido Medio (dB)", y = "Variabilidad (Desviación Estándar)") +
   theme_bw()
+
